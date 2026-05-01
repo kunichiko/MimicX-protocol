@@ -1,0 +1,25 @@
+# Dart
+.dart_tool/
+.packages
+build/
+.pub-cache/
+.pub/
+pubspec.lock
+
+# C/C++
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+build/
+cmake-build-*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
