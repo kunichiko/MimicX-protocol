@@ -1,4 +1,4 @@
-# Mimic X (smart-retro-hid) Protocol Specification
+# Mimic X Protocol Specification
 
 **Version:** 0.4.0 (Draft)
 **Date:** 2026-05-05
@@ -12,7 +12,7 @@
 
 ## 1. 概要
 
-smart-retro-hid プロトコルは、USB-MIDI の上に構築されたレトロ PC 向け HID デバイス制御プロトコルである。
+Mimic X プロトコルは、USB-MIDI の上に構築されたレトロ PC 向け HID デバイス制御プロトコルである。
 スマートフォン（ホスト）とマイコン（デバイス）間で、キーボード・ジョイスティック・マウスなどの HID 操作を双方向にやりとりする。
 
 ### 1.1. 設計原則
@@ -21,7 +21,7 @@ smart-retro-hid プロトコルは、USB-MIDI の上に構築されたレトロ 
 2. **リアルタイム操作は素の MIDI メッセージ** — エンコード不要、最小レイテンシ
 3. **ネゴシエーション・設定は SysEx** — 可変長の構造化データを送受信
 4. **デバイス非依存** — ホスト（アプリ）はデバイスから自己申告された情報に基づいて UI を切り替える
-5. **汎用性** — smart-retro-hid 以外のプロジェクトでも USB-MIDI 制御プロトコルとして流用可能
+5. **汎用性** — Mimic X 以外のプロジェクトでも USB-MIDI 制御プロトコルとして流用可能
 
 ### 1.2. 用語
 
@@ -223,7 +223,7 @@ F7              SysEx 終了
 ```
 
 - **Manufacturer ID `0x7D`**: MIDI 規格で非商用/教育用途に予約されている ID
-- **Sub ID `0x01`**: smart-retro-hid プロトコルの識別子
+- **Sub ID `0x01`**: Mimic X プロトコルの識別子
 
 ※ 将来商用化する場合は MMA (MIDI Manufacturers Association) に正式な Manufacturer ID を申請する。
 
