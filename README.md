@@ -1,6 +1,10 @@
 # smart-retro-hid-protocol
 
+**製品名: Mimic X**
+
 USB-MIDIを利用した汎用HID制御通信プロトコルライブラリ。Dart（Flutter向け）とC/C++（マイコン向け）の実装を提供。
+
+「Mimic X」プロジェクトの中核となる通信プロトコル仕様。
 
 ## 概要
 
