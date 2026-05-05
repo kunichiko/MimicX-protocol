@@ -1,4 +1,4 @@
-# smart-retro-hid-protocol
+# MimicX-protocol
 
 **製品名: Mimic X**
 
@@ -22,6 +22,6 @@ USB-MIDIを利用した汎用HID制御通信プロトコルライブラリ。Dar
 
 ## 関連リポジトリ
 
-- [smart-retro-hid-app](../smart-retro-hid-app) - Flutterアプリ
-- [smart-retro-hid-firmware](../smart-retro-hid-firmware) - マイコンファームウェア
-- [smart-retro-hid-hardware](../smart-retro-hid-hardware) - 基板設計データ
+- [MimicX-app](https://github.com/kunichiko/MimicX-app) - Flutterアプリ
+- [MimicX-firmware](https://github.com/kunichiko/MimicX-firmware) - マイコンファームウェア
+- [MimicX-hardware](https://github.com/kunichiko/MimicX-hardware) - 基板設計データ
