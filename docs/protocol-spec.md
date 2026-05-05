@@ -1,7 +1,13 @@
-# smart-retro-hid Protocol Specification
+# Mimic X (smart-retro-hid) Protocol Specification
 
-**Version:** 0.1.0 (Draft)
-**Date:** 2026-05-01
+**Version:** 0.3.0 (Draft)
+**Date:** 2026-05-05
+
+## 変更履歴
+
+- **0.3.0** (2026-05-05): IDENTIFY_RESPONSE をチャンネルマップ方式に変更。1台のデバイスで複数 HID 種別 (各 MIDI チャンネルに別の HID を割り当て) をサポート
+- **0.2.0** (2026-05-05): X68000 キーボード/マウスプロトコル詳細を追加 (Appendix A, C)、マウス CC 仕様確定、スキャンコード一覧拡充
+- **0.1.0** (2026-05-01): 初版
 
 ## 1. 概要
 
@@ -131,19 +137,53 @@ Control Change, Channel 0
 | 0x34 | 左トリガー |
 | 0x35 | 右トリガー |
 
-### 4.3. マウス (Channel 2) — 将来拡張
+### 4.3. マウス (Channel 2)
+
+#### 4.3.1. ボタン
+
+```
+Note On, Channel 2
+  note     = ボタン番号
+  velocity = 0x7F
+
+Note Off, Channel 2
+  note     = ボタン番号
+  velocity = 0x00
+```
+
+| ボタン番号 | 名称 |
+|-----------|------|
+| 0 | 左ボタン |
+| 1 | 右ボタン |
+| 2 | 中ボタン |
+| 3-127 | 拡張 |
+
+#### 4.3.2. 移動量 (差分)
+
+マウス移動はホストが定期的に送信する 1 イベントあたりの差分。
+MIDI の 7bit 制限のため、1 イベントあたり -64〜+63 の範囲で表現する。
+連続的にイベントを送ることで大きな移動も表現できる。
 
 ```
 Control Change, Channel 2
-  CC 0x30 = X 移動量 (0-127, 64=移動なし, <64=左, >64=右)
-  CC 0x31 = Y 移動量 (0-127, 64=移動なし, <64=上, >64=下)
-  CC 0x32 = スクロール (0-127, 64=移動なし)
-
-Note On/Off, Channel 2
-  note 0 = 左ボタン
-  note 1 = 右ボタン
-  note 2 = 中ボタン
+  control = 軸番号
+  value   = 移動量 (オフセット表現: 64 = 0, 0 = -64, 127 = +63)
 ```
+
+| CC 番号 | 軸 |
+|---------|-----|
+| 0x30 | dX (右が正) |
+| 0x31 | dY (下が正) |
+| 0x32 | スクロール (下スクロールが正) |
+
+#### 4.3.3. 大きな移動量を送る場合
+
+X68000 マウスは 1 レポートあたり -128〜+127 の符号付き 8bit。MIDI の 7bit を超える場合は、複数の CC を送ってデバイス側で累積する。
+
+例: dX = +100 を送りたい場合
+- CC 0x30 value=127 (= +63) を 1 回送信
+- CC 0x30 value=101 (= +37) を 1 回送信
+- 累積で +100 が反映される
 
 ## 5. 状態通知メッセージ (デバイス→ホスト)
 
@@ -217,22 +257,32 @@ F0 7D 01 01 F7
 
 ### 6.4. IDENTIFY_RESPONSE (0x02)
 
-デバイスが自身の情報を応答する。
+デバイスが自身の情報と各 MIDI チャンネルの割り当てを応答する。
 
 ```
 F0 7D 01 02
   <protocol_version_major>    プロトコルバージョン (メジャー)
   <protocol_version_minor>    プロトコルバージョン (マイナー)
-  <device_type>               デバイスタイプ (下表)
-  <target_system>             ターゲットシステム (下表)
   <firmware_version_major>    ファームウェアバージョン (メジャー)
   <firmware_version_minor>    ファームウェアバージョン (マイナー)
   <firmware_version_patch>    ファームウェアバージョン (パッチ)
+  <num_channels>              チャンネル割り当て数 (1〜16)
+  <ch_a> <type_a> <target_a>  各チャンネルの割り当て (3 byte × N)
+  <ch_b> <type_b> <target_b>
+  ...
   <device_name ...>           デバイス名 (ASCII, 可変長)
 F7
 ```
 
-#### 6.4.1. デバイスタイプ
+#### 6.4.1. チャンネル割り当て
+
+`<ch> <type> <target>` の 3 byte ブロックを `num_channels` 個並べる。
+
+- `<ch>`: MIDI チャンネル番号 (0-15)
+- `<type>`: HID デバイスタイプ (下表)
+- `<target>`: ターゲットシステム (下表)
+
+#### 6.4.2. デバイスタイプ
 
 | 値 | デバイスタイプ |
 |----|---------------|
@@ -240,10 +290,11 @@ F7
 | 0x01 | Keyboard |
 | 0x02 | Joystick / Gamepad |
 | 0x03 | Mouse |
-| 0x04 | Keyboard + Mouse (複合) |
 | 0x10 | Custom / Generic I/O |
 
-#### 6.4.2. ターゲットシステム
+複合デバイス (例: キーボード+マウス) は **複数のチャンネル** に分けて割り当てる。
+
+#### 6.4.3. ターゲットシステム
 
 | 値 | ターゲットシステム |
 |----|-------------------|
@@ -261,6 +312,29 @@ F7
 | 0x10 | IBM PC/AT (PS/2) |
 | 0x11 | IBM PC (XT) |
 | 0x20-0x7F | 予約（将来拡張） |
+| 0x40 | Mega Drive (6 ボタンファイティングパッド) |
+
+#### 6.4.4. 例
+
+**ATARI ジョイパッド単独 (Ch0):**
+```
+num_channels = 1
+ch=0, type=2 (Joystick), target=1 (ATARI)
+```
+
+**X68000 キーボード+マウス (Ch0=KB, Ch1=Mouse):**
+```
+num_channels = 2
+ch=0, type=1 (Keyboard), target=2 (X68000)
+ch=1, type=3 (Mouse),    target=2 (X68000)
+```
+
+**複合デバイス (Ch0=ATARI Joystick, Ch1=X68000 Keyboard):**
+```
+num_channels = 2
+ch=0, type=2 (Joystick), target=1 (ATARI)
+ch=1, type=1 (Keyboard), target=2 (X68000)
+```
 
 ### 6.5. CAPABILITY_REQUEST (0x03)
 
@@ -328,11 +402,12 @@ F0 7D 01 7F F7
   │── SysEx: IDENTIFY_REQUEST ────────→│
   │                                    │
   │←── SysEx: IDENTIFY_RESPONSE ──────│
-  │    protocol: 0.1                   │
-  │    device_type: Keyboard           │
-  │    target: X68000                  │
+  │    protocol: 0.3                   │
   │    firmware: 1.0.0                 │
-  │    name: "smart-retro-hid-x68k-kb" │
+  │    num_channels: 2                 │
+  │    [ch=0, Keyboard, X68000]        │
+  │    [ch=1, Mouse, X68000]           │
+  │    name: "mimic-x-x68k-kb"         │
   │                                    │
   │── SysEx: CAPABILITY_REQUEST ──────→│
   │                                    │
@@ -378,22 +453,81 @@ Ln = Bn & 0x7F
 - MINOR 変更: 後方互換性のある機能追加
 - デバイスとホストは IDENTIFY_RESPONSE のバージョンを確認し、非互換の場合はユーザーに通知する
 
-## Appendix A: X68000 キーボード スキャンコード（抜粋）
+## Appendix A: X68000 キーボード スキャンコード一覧
+
+参考: [taneken/USBKBD2X68K](https://github.com/taneken/USBKBD2X68K) 及び X68000 テクニカルリファレンス
+
+### 上段 (記号・数字・BS)
 
 | コード | キー | コード | キー |
 |--------|------|--------|------|
-| 0x01 | ESC | 0x02 | 1 |
-| 0x03 | 2 | 0x04 | 3 |
-| 0x0F | TAB | 0x1D | SPACE |
-| 0x35 | RETURN | 0x36 | DEL |
-| 0x3B | UP | 0x3C | LEFT |
-| 0x3D | RIGHT | 0x3E | DOWN |
-| 0x55 | XF1 | 0x56 | XF2 |
-| 0x5A | BREAK | 0x5C | COPY |
-| 0x63-0x6C | F1-F10 | 0x70 | SHIFT |
-| 0x71 | CTRL | 0x72 | OPT.1 |
+| 0x01 | ESC | 0x02-0x0B | 1〜0 |
+| 0x0C | - | 0x0D | ^ |
+| 0x0E | ¥ | 0x0F | BS |
 
-※ 完全なスキャンコード表は X68000 テクニカルリファレンスを参照。
+### 第二段 (TAB, QWERTY)
+
+| コード | キー | コード | キー |
+|--------|------|--------|------|
+| 0x10 | TAB | 0x11-0x1A | Q W E R T Y U I O P |
+| 0x1B | @ | 0x1C | [ |
+| 0x1D | RETURN | | |
+
+### 第三段 (ASDF...)
+
+| コード | キー | コード | キー |
+|--------|------|--------|------|
+| 0x1E-0x26 | A S D F G H J K L | 0x27 | ; |
+| 0x28 | : | 0x29 | ] |
+
+### 第四段 (ZXCV...)
+
+| コード | キー | コード | キー |
+|--------|------|--------|------|
+| 0x2A-0x33 | Z X C V B N M , . / | 0x34 | _ |
+| 0x35 | Space | | |
+
+### 編集・カーソルキー
+
+| コード | キー | コード | キー |
+|--------|------|--------|------|
+| 0x36 | HOME | 0x37 | DEL |
+| 0x38 | ROLLUP | 0x39 | ROLLDOWN |
+| 0x3A | UNDO | 0x3B | ← |
+| 0x3C | ↑ | 0x3D | → |
+| 0x3E | ↓ | 0x3F | CLR |
+
+### テンキー
+
+| コード | キー | コード | キー |
+|--------|------|--------|------|
+| 0x40 | / (テンキー) | 0x41 | * |
+| 0x42 | - (テンキー) | 0x43-0x45 | 7 8 9 |
+| 0x46 | + | 0x47-0x49 | 4 5 6 |
+| 0x4A | = | 0x4B-0x4D | 1 2 3 |
+| 0x4E | ENTER (テンキー) | 0x4F | 0 |
+| 0x50 | , (テンキー) | 0x51 | . |
+
+### ファンクションキー
+
+| コード | キー | コード | キー |
+|--------|------|--------|------|
+| 0x52 | 記号入力 | 0x53 | 登録 |
+| 0x54 | HELP | 0x55-0x59 | XF1 XF2 XF3 XF4 XF5 |
+| 0x5A | かな | 0x5B | ローマ字 |
+| 0x5C | コード入力 | 0x5D | CAPS |
+| 0x5E | INS | 0x5F | ひらがな |
+| 0x60 | 全角 | 0x61 | BREAK |
+| 0x62 | COPY | 0x63-0x6C | F1〜F10 |
+
+### 修飾キー / 拡張
+
+| コード | キー |
+|--------|------|
+| 0x70 | SHIFT |
+| 0x71 | CTRL |
+| 0x72 | OPT.1 |
+| 0x73 | OPT.2 |
 
 ## Appendix B: ATARI ジョイスティック ボタンマッピング
 
@@ -409,3 +543,55 @@ ATARI 仕様 (DE-9) のジョイスティックのピンと、本プロトコル
 | 9 | Button 2 (一部機種のみ) | 5 |
 | 8 | GND | — |
 | 7 | +5V | — |
+
+## Appendix C: X68000 キーボード/マウスコネクタ
+
+DIN 7pin (ミニ DIN) コネクタ。
+
+| Pin | 信号 | 方向 (本体側) | 用途 |
+|-----|------|---------------|------|
+| 1 | Vcc2 (+5V) | OUT | キーボード/マウス電源 |
+| 2 | MSDATA | IN | マウスデータ (4800bps 8N2) |
+| 3 | KEY RxD | IN | キーボードへのコマンド (LED, リピート設定: 2400bps 8N1) |
+| 4 | KEY TxD | OUT | キーコード送信 (2400bps 8N1) |
+| 5 | READY | OUT | ホスト準備完了 (1=READY) |
+| 6 | REMOTE | IN | TV リモコン (未使用) |
+| 7 | GND | — | |
+
+信号レベル: 5V TTL
+
+### キーボード UART (Pin 3, 4)
+
+- **2400 bps, 8N1**
+- KBD → 本体: 1 byte/key
+  - bit7 = 0:押下 (make), 1:解放 (break)
+  - bit6-0 = スキャンコード (Appendix A 参照)
+- 本体 → KBD: 制御コマンド
+  - bit7 = 1: LED 制御 `1<全角><ひらがな><INS><CAPS><コード入力><ローマ字><かな>`
+    - 各ビット 0:点灯, 1:消灯
+  - 0x60〜0x6F: キーリピート開始遅延 (200 + n × 100 ms)
+  - 0x70〜0x7F: キーリピート間隔 (30 + n² × 5 ms)
+
+### マウス UART (Pin 2)
+
+- **4800 bps, 8N2** (ストップビット 2)
+- 本体側からの **MSCTRL 信号 (HIGH→LOW エッジ)** をトリガに、3 byte 連続送信
+- アイドル中の MSCTRL は HIGH。データ要求時に LOW にし、最終ビット送信後 ~2.56ms で HIGH に復帰
+- 周期: 約 20 ms (50Hz)
+
+#### 3 byte データフォーマット
+
+| Byte | bit7 | bit6 | bit5 | bit4 | bit3 | bit2 | bit1 | bit0 |
+|------|------|------|------|------|------|------|------|------|
+| 0    | X_OVF+ | X_OVF- | Y_OVF+ | Y_OVF- | (予約) | 中ボタン | 右ボタン | 左ボタン |
+| 1    | dX (signed 8bit, 右が正) |
+| 2    | dY (signed 8bit, 下が正) |
+
+- `X_OVF+/-`: X 軸オーバーフローフラグ (移動量が +127 / -128 を超えた場合)
+- 移動量は前回送信からの差分。送信後リセット。
+
+#### MSCTRL 信号の入手
+
+X68000 本体のキーボード端子では、MSCTRL は専用ピンとしては存在せず、**KEY RxD (Pin 3) のラインを兼用**するという情報がある（要実機検証）。
+
+実装上は、KEY RxD を入力しつつ、立ち下がりエッジを EXTI で検知することで MSCTRL として機能させる。
