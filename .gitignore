@@ -23,3 +23,6 @@ cmake-build-*/
 
 # macOS
 .DS_Store
+
+# Claude Code local settings (personal permissions)
+.claude/settings.local.json

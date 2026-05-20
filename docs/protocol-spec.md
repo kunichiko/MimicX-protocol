@@ -1,10 +1,11 @@
 # Mimic X Protocol Specification
 
-**Version:** 0.4.0 (Draft)
-**Date:** 2026-05-05
+**Version:** 0.5.0 (Draft)
+**Date:** 2026-05-20
 
 ## 変更履歴
 
+- **0.5.0** (2026-05-20): 全 SysEx コマンドに **request ID** と **status** を導入。`SET_CONFIG`/`RESET` には新規 `ACK` (0x06) で応答する。`IDENTIFY_REQUEST`/`IDENTIFY_RESPONSE` のみ後方互換性のため旧フォーマットを維持 (ブートストラップ用途)。ホストはバージョン非対応を `IDENTIFY_RESPONSE` の `protocol_version` で判定する
 - **0.4.0** (2026-05-05): ターゲット機からの受信バイトを SysEx TARGET_RX (0x05) で生バイト転送する方式に変更。Channel 14 の LED CC 通知 (5.1) は廃止し、解釈はアプリ側で行う
 - **0.3.0** (2026-05-05): IDENTIFY_RESPONSE をチャンネルマップ方式に変更。1台のデバイスで複数 HID 種別 (各 MIDI チャンネルに別の HID を割り当て) をサポート
 - **0.2.0** (2026-05-05): X68000 キーボード/マウスプロトコル詳細を追加 (Appendix A, C)、マウス CC 仕様確定、スキャンコード一覧拡充
@@ -213,37 +214,67 @@ Control Change, Channel 15
 
 ### 6.1. フォーマット
 
+プロトコル 0.5 以降、`IDENTIFY_REQUEST` / `IDENTIFY_RESPONSE` を除く全てのコマンド/応答は **request ID** (7bit) を含む。ホストがリクエストごとに 0x00〜0x7F の任意の値を採番し、デバイスは応答に同じ値をエコーする。複数リクエストが in-flight でも対応関係を一意に特定できる。
+
+#### 6.1.1. 共通リクエスト形式 (ホスト→デバイス, 0.5+)
+
 ```
-F0              SysEx 開始
-7D              Manufacturer ID (Non-Commercial / Educational Use)
-<sub_id>        サブ ID (プロトコル識別)
-<command>       コマンド
-<data ...>      データ (各バイト 0x00-0x7F)
-F7              SysEx 終了
+F0 7D 01 <command> <req_id> <payload...> F7
+```
+
+#### 6.1.2. 共通レスポンス形式 (デバイス→ホスト, 0.5+)
+
+```
+F0 7D 01 <rsp_cmd> <req_id> <status> <payload...> F7
 ```
 
 - **Manufacturer ID `0x7D`**: MIDI 規格で非商用/教育用途に予約されている ID
 - **Sub ID `0x01`**: Mimic X プロトコルの識別子
+- **`req_id`**: 0x00-0x7F の任意の値。デバイスは応答に同じ値をエコーする
+- **`status`**: 処理結果 (6.1.3 参照)
 
 ※ 将来商用化する場合は MMA (MIDI Manufacturers Association) に正式な Manufacturer ID を申請する。
 
+#### 6.1.3. Status コード
+
+| 値 | 名称 | 意味 |
+|----|------|------|
+| 0x00 | OK | 正常完了 |
+| 0x01 | UNKNOWN_COMMAND | コマンド未対応 |
+| 0x02 | UNKNOWN_KEY | SET_CONFIG/GET_CONFIG の key 未対応 |
+| 0x03 | INVALID_VALUE | SET_CONFIG の value が範囲外/不正 |
+| 0x7F | GENERIC_ERROR | その他のエラー |
+
+#### 6.1.4. ACK の取り扱い
+
+- ホストはリクエスト送信後、対応する応答 (ACK / 専用レスポンス) を `req_id` でマッチして待機する
+- 推奨タイムアウト: **100 ms** (USB-MIDI Full-Speed)
+- タイムアウト or `status != OK` の場合、ホストはユーザーにエラーを表示する
+- `TARGET_RX` (デバイス発の非同期通知) は req_id を持たない
+
+#### 6.1.5. 後方互換性
+
+- 旧プロトコル (0.4 以下) のファームは req_id を解釈せず ACK も返さない。新アプリは `IDENTIFY_RESPONSE` で受信した `protocol_version` を `MIN_SUPPORTED_PROTOCOL` (= 0.5.0) と比較し、未満なら未対応として接続を拒否する
+- `IDENTIFY_REQUEST` / `IDENTIFY_RESPONSE` だけはブートストラップ目的で旧フォーマット (req_id なし) のまま据え置き
+
 ### 6.2. コマンド一覧
 
-| コマンド | 値 | 方向 | 説明 |
-|---------|-----|------|------|
-| IDENTIFY_REQUEST | 0x01 | ホスト→デバイス | デバイス識別要求 |
-| IDENTIFY_RESPONSE | 0x02 | デバイス→ホスト | デバイス識別応答 |
-| CAPABILITY_REQUEST | 0x03 | ホスト→デバイス | 機能詳細要求 |
-| CAPABILITY_RESPONSE | 0x04 | デバイス→ホスト | 機能詳細応答 |
-| TARGET_RX | 0x05 | デバイス→ホスト | ターゲット機から受信した生バイト |
-| SET_CONFIG | 0x10 | ホスト→デバイス | 設定変更 |
-| GET_CONFIG | 0x11 | ホスト→デバイス | 設定取得要求 |
-| CONFIG_RESPONSE | 0x12 | デバイス→ホスト | 設定応答 |
-| RESET | 0x7F | ホスト→デバイス | デバイスリセット |
+| コマンド | 値 | 方向 | リクエスト形式 | レスポンス |
+|---------|-----|------|---------------|-----------|
+| IDENTIFY_REQUEST | 0x01 | ホスト→デバイス | レガシー (req_id なし) | IDENTIFY_RESPONSE |
+| IDENTIFY_RESPONSE | 0x02 | デバイス→ホスト | レガシー (req_id なし) | — |
+| CAPABILITY_REQUEST | 0x03 | ホスト→デバイス | `03 <req_id>` | CAPABILITY_RESPONSE |
+| CAPABILITY_RESPONSE | 0x04 | デバイス→ホスト | `04 <req_id> <status> <tlv...>` | — |
+| TARGET_RX | 0x05 | デバイス→ホスト | `05 <ch> <hi4> <lo4>` (非同期通知, req_id なし) | — |
+| ACK | 0x06 | デバイス→ホスト | `06 <req_id> <status> <orig_cmd>` | — |
+| SET_CONFIG | 0x10 | ホスト→デバイス | `10 <req_id> <key> <value...>` | ACK |
+| GET_CONFIG | 0x11 | ホスト→デバイス | `11 <req_id> <key>` | CONFIG_RESPONSE |
+| CONFIG_RESPONSE | 0x12 | デバイス→ホスト | `12 <req_id> <status> <key> <value...>` | — |
+| RESET | 0x7F | ホスト→デバイス | `7F <req_id>` | ACK |
 
 ### 6.3. IDENTIFY_REQUEST (0x01)
 
-ホストがデバイスに対して自己申告を要求する。
+ホストがデバイスに対して自己申告を要求する。**ブートストラップ用途のため req_id は付与しない。**
 
 ```
 F0 7D 01 01 F7
@@ -251,7 +282,9 @@ F0 7D 01 01 F7
 
 ### 6.4. IDENTIFY_RESPONSE (0x02)
 
-デバイスが自身の情報と各 MIDI チャンネルの割り当てを応答する。
+デバイスが自身の情報と各 MIDI チャンネルの割り当てを応答する。**req_id は付与しない (レガシーフォーマット)。**
+
+ホストはここで受信した `protocol_version_major / minor` を、ホスト側の最低サポートバージョン (`MIN_SUPPORTED_PROTOCOL`) と比較する。未満なら以降の通信を打ち切り、ユーザーに「ファームウェアの更新が必要」と表示する。
 
 ```
 F0 7D 01 02
@@ -335,7 +368,7 @@ ch=1, type=1 (Keyboard), target=2 (X68000)
 特定のデバイスタイプに応じた詳細な機能情報を要求する。
 
 ```
-F0 7D 01 03 F7
+F0 7D 01 03 <req_id> F7
 ```
 
 ### 6.6. CAPABILITY_RESPONSE (0x04)
@@ -343,7 +376,7 @@ F0 7D 01 03 F7
 デバイスの詳細機能を応答する。TLV (Type-Length-Value) 形式で複数の機能を列挙する。
 
 ```
-F0 7D 01 04
+F0 7D 01 04 <req_id> <status>
   <cap_type> <cap_length> <cap_data ...>
   <cap_type> <cap_length> <cap_data ...>
   ...
@@ -362,7 +395,19 @@ F7
 | 0x11 | キーマップ名 | ASCII 文字列 |
 | 0x20 | 双方向通信対応 | 1 byte: 0=送信のみ, 1=双方向 |
 
-### 6.6.1. TARGET_RX (0x05)
+### 6.6.1. ACK (0x06)
+
+専用レスポンスを持たないリクエスト (`SET_CONFIG`, `RESET` 等) に対する汎用応答。
+
+```
+F0 7D 01 06 <req_id> <status> <orig_cmd> F7
+```
+
+- `<req_id>`: リクエストでホストが付与した値をエコー
+- `<status>`: 6.1.3 の status コード
+- `<orig_cmd>`: ACK 対象の元コマンド値 (例: `0x10` for SET_CONFIG)
+
+### 6.6.2. TARGET_RX (0x05)
 
 ターゲット機側からデバイスが受信した生の 1 byte をホストへ転送する。
 LED 制御、キーリピート設定、LED 輝度など、ターゲット機固有の制御コマンド
@@ -392,10 +437,10 @@ F0 7D 01 05 01 0C 05 F7
 
 ### 6.7. SET_CONFIG (0x10)
 
-デバイスの設定を変更する。
+デバイスの設定を変更する。応答は **ACK (0x06)**。
 
 ```
-F0 7D 01 10
+F0 7D 01 10 <req_id>
   <config_key>
   <config_value ...>
 F7
@@ -405,13 +450,16 @@ F7
 |-----------|------|-------|
 | 0x01 | キーリピート有効/無効 | 0=無効, 1=有効 |
 | 0x02 | キーリピート速度 | 0-127 (遅い→速い) |
+| 0x03 | ジョイスティック パッドモード | 0=ATARI, 1=MD 6B, 2=Libble Rabble (XPD-1LR) |
+
+未知の key は `status=UNKNOWN_KEY` (0x02)、value 範囲外は `status=INVALID_VALUE` (0x03) で ACK を返す。
 
 ### 6.8. RESET (0x7F)
 
-デバイスを初期状態にリセットする。全キー/ボタンを解放状態にする。
+デバイスを初期状態にリセットする。全キー/ボタンを解放状態にする。応答は **ACK (0x06)**。
 
 ```
-F0 7D 01 7F F7
+F0 7D 01 7F <req_id> F7
 ```
 
 ## 7. 接続シーケンス
@@ -421,25 +469,32 @@ F0 7D 01 7F F7
   │                                    │
   │  ── USB-MIDI 接続確立 ──           │
   │                                    │
-  │── SysEx: IDENTIFY_REQUEST ────────→│
+  │── SysEx: IDENTIFY_REQUEST ────────→│  (req_id なし: bootstrap)
   │                                    │
-  │←── SysEx: IDENTIFY_RESPONSE ──────│
-  │    protocol: 0.3                   │
-  │    firmware: 1.0.0                 │
+  │←── SysEx: IDENTIFY_RESPONSE ──────│  (req_id なし)
+  │    protocol: 0.5                   │
+  │    firmware: 0.6.0                 │
   │    num_channels: 2                 │
   │    [ch=0, Keyboard, X68000]        │
   │    [ch=1, Mouse, X68000]           │
   │    name: "mimic-x-x68k-kb"         │
   │                                    │
-  │── SysEx: CAPABILITY_REQUEST ──────→│
+  │  (proto >= MIN_SUPPORTED_PROTOCOL  │
+  │   を確認。未満なら未対応で中断)    │
   │                                    │
-  │←── SysEx: CAPABILITY_RESPONSE ────│
-  │    LED数: 7                        │
-  │    LED名: "かな","ローマ字",...      │
-  │    キーコード範囲: 0x00-0x72        │
-  │    双方向通信: 対応                 │
+  │── CAPABILITY_REQUEST (req_id=1) ──→│
   │                                    │
-  │  (アプリが X68000 キーボード UI を表示) │
+  │←── CAPABILITY_RESPONSE ───────────│
+  │    req_id=1, status=OK             │
+  │    LED数: 7, LED名, キーコード範囲 │
+  │                                    │
+  │── SET_CONFIG (req_id=2, key=0x03,──→│  パッドモード = Libble Rabble
+  │   value=2)                         │
+  │                                    │
+  │←── ACK (req_id=2, status=OK, ─────│
+  │    orig_cmd=0x10)                  │
+  │                                    │
+  │  (アプリが該当 UI を表示)          │
   │                                    │
   │── Note On (CH1, note=0x01) ──────→│  ESC キー押下
   │── Note Off (CH1, note=0x01) ─────→│  ESC キー解放
