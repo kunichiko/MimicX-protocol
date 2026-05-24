@@ -1,10 +1,11 @@
 # Mimic X Protocol Specification
 
-**Version:** 0.5.0 (Draft)
-**Date:** 2026-05-20
+**Version:** 0.6.0 (Draft)
+**Date:** 2026-05-24
 
 ## 変更履歴
 
+- **0.6.0** (2026-05-24): `EMIT_REMOTE` (0x07) を追加。X68000 キーボードの REMOTE 端子から SHARP 12-bit リモコンコードをホストから発射可能に。SHIFT/OPT.2 + 特定キーによるリモコン発射はホスト側で検出し、本コマンドで送出する設計
 - **0.5.0** (2026-05-20): 全 SysEx コマンドに **request ID** と **status** を導入。`SET_CONFIG`/`RESET` には新規 `ACK` (0x06) で応答する。`IDENTIFY_REQUEST`/`IDENTIFY_RESPONSE` のみ後方互換性のため旧フォーマットを維持 (ブートストラップ用途)。ホストはバージョン非対応を `IDENTIFY_RESPONSE` の `protocol_version` で判定する
 - **0.4.0** (2026-05-05): ターゲット機からの受信バイトを SysEx TARGET_RX (0x05) で生バイト転送する方式に変更。Channel 14 の LED CC 通知 (5.1) は廃止し、解釈はアプリ側で行う
 - **0.3.0** (2026-05-05): IDENTIFY_RESPONSE をチャンネルマップ方式に変更。1台のデバイスで複数 HID 種別 (各 MIDI チャンネルに別の HID を割り当て) をサポート
@@ -267,6 +268,7 @@ F0 7D 01 <rsp_cmd> <req_id> <status> <payload...> F7
 | CAPABILITY_RESPONSE | 0x04 | デバイス→ホスト | `04 <req_id> <status> <tlv...>` | — |
 | TARGET_RX | 0x05 | デバイス→ホスト | `05 <ch> <hi4> <lo4>` (非同期通知, req_id なし) | — |
 | ACK | 0x06 | デバイス→ホスト | `06 <req_id> <status> <orig_cmd>` | — |
+| EMIT_REMOTE | 0x07 | ホスト→デバイス | `07 <req_id> <code>` | ACK |
 | SET_CONFIG | 0x10 | ホスト→デバイス | `10 <req_id> <key> <value...>` | ACK |
 | GET_CONFIG | 0x11 | ホスト→デバイス | `11 <req_id> <key>` | CONFIG_RESPONSE |
 | CONFIG_RESPONSE | 0x12 | デバイス→ホスト | `12 <req_id> <status> <key> <value...>` | — |
@@ -434,6 +436,49 @@ F0 7D 01 05 01 0C 05 F7
 
 ホスト側は `(0x0C << 4) | 0x05 = 0xC5` を復元し、`bit7=1` で LED コマンドと
 判定し、各ビットから LED 状態を抽出する。
+
+### 6.6.3. EMIT_REMOTE (0x07)
+
+X68000 キーボードの REMOTE 端子から SHARP 12-bit 形式のリモコンコードを送出するようデバイスに要求する。応答は **ACK (0x06)**。
+
+REMOTE 信号は X68000 純正カラーディスプレイテレビ (CZ-607D / CZ-614D 等) で受信され、TV チャンネル切替・音量・電源等の制御に用いられる。
+
+実機キーボードでは SHIFT (および本体設定によっては OPT.2) + 特定キーで自動発射されるが、本コマンドにより任意のコードを発射できる。ホスト側で SHIFT/OPT.2 + キーを検出して本コマンドを呼び出すことを想定 (ファーム側に巨大な変換テーブルを置かないため)。X68000 本体からキーボードへの「専用ディスプレイ制御コマンド」(0x00-0x3F) 受信に対するファーム側自動発射とは独立した経路。
+
+```
+F0 7D 01 07 <req_id> <code> F7
+```
+
+| code | 意味 | 備考 |
+|------|------|------|
+| 0x01 | VOL_UP | 押し続けで最大音量 (リピート対象) |
+| 0x02 | VOL_DOWN | 押し続けで最小音量 (リピート対象) |
+| 0x03 | VOL_NORMAL | 標準音量 |
+| 0x04 | CH_CALL | チャンネル番号表示 |
+| 0x05 | RESET | テレビ画面リセット |
+| 0x06 | MUTE | 音声ミュート (トグル) |
+| 0x07 | POWER_ON | 電源 ON |
+| 0x08 | TV_COMPUTER | テレビ ⇔ コンピュータ |
+| 0x09 | VIDEO | テレビ ⇔ 外部入力 |
+| 0x0A | CONTRAST_NORMAL | コントラスト標準 |
+| 0x0B | CH_UP | チャンネル + (リピート対象, 12→1 巡回) |
+| 0x0C | CH_DOWN | チャンネル − (リピート対象, 1→12 巡回) |
+| 0x0D | POWER_OFF | 電源 OFF |
+| 0x0E | POWER_TOGGLE | 電源 ON/OFF トグル |
+| 0x0F | SUPERIMPOSE | スーパーインポーズ ⇔ 解除 |
+| 0x10-0x1B | CH_1 - CH_12 | 直接選局 |
+| 0x1C | TV | テレビ画面 |
+| 0x1D | COMPUTER | コンピュータ画面 |
+| 0x1E | SUPERIMPOSE_1 | スーパーインポーズ (コントラストダウン) |
+| 0x1F | SUPERIMPOSE_2 | スーパーインポーズ (コントラストノーマル) |
+
+範囲外コード (0x00, 0x20-0x7F) は `status=INVALID_VALUE` (0x03) で ACK を返す。
+
+#### リピート挙動
+
+1 リクエストにつきファームは 1 完全パケット (SHARP12 の data + 反転 data + トレーラー、約 100 ms) を 1 回送出する。
+
+「押し続け」が必要なコード (VOL_UP/DOWN, CH_UP/DOWN) はホスト側でキーリピートタイマを動かして本コマンドを繰り返し送出すること。リピート間隔の目安は 100 ms 以上 (パケット長と同程度) を推奨。
 
 ### 6.7. SET_CONFIG (0x10)
 
