@@ -1,10 +1,26 @@
 # Mimic X Protocol Specification
 
-**Version:** 0.6.0 (Draft)
-**Date:** 2026-05-24
+**Version:** 0.7.0 (Draft)
+**Date:** 2026-06-01
 
 ## 変更履歴
 
+- **0.7.0** (2026-06-01): 接続ライフサイクルとステータス LED の整理。
+  - `HEART_BEAT` (0x08) を新設。ホストは 1 秒間隔で送信し、デバイスは ACK 応答 +
+    内部状態を **CONNECTED** に保持する。3 秒間 HB が無いとデバイスは
+    **WAITING** 状態に戻り、LED override も自動リセットされる
+  - `DISCONNECT` (0x09) を新設。操作 / 編集画面から戻るときホストが明示送信する。
+    デバイスは即座に `SCANNED` (緑) に戻り override をクリアする (HB タイムアウト
+    の 3 秒を待たない)
+  - ステータス LED (PB0 WS2812B) の状態モデルを定義:
+    `WAITING`(黄) → `SCANNED`(緑) → `CONNECTED`(青) → `+activity`(青 4Hz 点滅)。
+    遷移はデバイス側が自律的に行い (IDENTIFY 受信で SCANNED、HB 受信で CONNECTED、
+    CONNECTED 中の Note/CC 受信で 500ms 青点滅)、ホストは `SET_LED` (0x20) と
+    `SET_LED_BLINK` (0x21) で上書き (override) のみ行う
+  - `SET_LED` で RGB=(255,255,255) を送ると **override reset** となり、LED は
+    状態色に戻り点滅もクリアされる
+  - `IDENTIFY_RESPONSE` に Chip UID 由来の **シリアル番号 (16 ASCII hex)** を
+    追加。チャンネルマップ直後・デバイス名直前の固定 16 byte
 - **0.6.0** (2026-05-24): `EMIT_REMOTE` (0x07) を追加。X68000 キーボードの REMOTE 端子から SHARP 12-bit リモコンコードをホストから発射可能に。SHIFT/OPT.2 + 特定キーによるリモコン発射はホスト側で検出し、本コマンドで送出する設計
 - **0.5.0** (2026-05-20): 全 SysEx コマンドに **request ID** と **status** を導入。`SET_CONFIG`/`RESET` には新規 `ACK` (0x06) で応答する。`IDENTIFY_REQUEST`/`IDENTIFY_RESPONSE` のみ後方互換性のため旧フォーマットを維持 (ブートストラップ用途)。ホストはバージョン非対応を `IDENTIFY_RESPONSE` の `protocol_version` で判定する
 - **0.4.0** (2026-05-05): ターゲット機からの受信バイトを SysEx TARGET_RX (0x05) で生バイト転送する方式に変更。Channel 14 の LED CC 通知 (5.1) は廃止し、解釈はアプリ側で行う
@@ -269,9 +285,13 @@ F0 7D 01 <rsp_cmd> <req_id> <status> <payload...> F7
 | TARGET_RX | 0x05 | デバイス→ホスト | `05 <ch> <hi4> <lo4>` (非同期通知, req_id なし) | — |
 | ACK | 0x06 | デバイス→ホスト | `06 <req_id> <status> <orig_cmd>` | — |
 | EMIT_REMOTE | 0x07 | ホスト→デバイス | `07 <req_id> <code>` | ACK |
+| HEART_BEAT | 0x08 | ホスト→デバイス | `08 <req_id>` | ACK |
+| DISCONNECT | 0x09 | ホスト→デバイス | `09 <req_id>` | ACK |
 | SET_CONFIG | 0x10 | ホスト→デバイス | `10 <req_id> <key> <value...>` | ACK |
 | GET_CONFIG | 0x11 | ホスト→デバイス | `11 <req_id> <key>` | CONFIG_RESPONSE |
 | CONFIG_RESPONSE | 0x12 | デバイス→ホスト | `12 <req_id> <status> <key> <value...>` | — |
+| SET_LED | 0x20 | ホスト→デバイス | `20 <req_id> <R> <G> <B>` | ACK |
+| SET_LED_BLINK | 0x21 | ホスト→デバイス | `21 <req_id> <speed>` | ACK |
 | RESET | 0x7F | ホスト→デバイス | `7F <req_id>` | ACK |
 
 ### 6.3. IDENTIFY_REQUEST (0x01)
@@ -299,9 +319,21 @@ F0 7D 01 02
   <ch_a> <type_a> <target_a>  各チャンネルの割り当て (3 byte × N)
   <ch_b> <type_b> <target_b>
   ...
+  <serial[16]>                Chip UID 由来のシリアル番号 (固定 16 byte ASCII hex 大文字)
   <device_name ...>           デバイス名 (ASCII, 可変長)
 F7
 ```
+
+#### 6.4.0. シリアル番号 (serial[16])
+
+プロトコル 0.7 以降、チャンネルマップとデバイス名の間に **16 byte 固定** のシリアル番号フィールドが入る。MCU の Chip UID (CH32X035 では 64bit) をメモリ並びのバイト順で先頭から `[0-9A-F]` 大文字 16 文字に展開したもの。
+
+- 例: Chip UID = `CD AB D8 2C 27 BD CC 95` → `"CDABD82C27BDCC95"`
+- ホストアプリはこの値をアダプタ個体の **永続識別子** として使い、ユーザー定義の表示名 (ニックネーム) 等を端末ローカルに紐付けて保存する
+- 値は不変。USB ID (`vendor:product:iSerial`) と異なり、ファーム再書込でも保持される
+- プロトコル 0.6 以下のファームでは本フィールドが存在しないため、新アプリは `IDENTIFY_RESPONSE` の `protocol_version` を確認し、0.7 未満なら更新を促す
+
+
 
 #### 6.4.1. チャンネル割り当て
 
@@ -480,6 +512,64 @@ F0 7D 01 07 <req_id> <code> F7
 
 「押し続け」が必要なコード (VOL_UP/DOWN, CH_UP/DOWN) はホスト側でキーリピートタイマを動かして本コマンドを繰り返し送出すること。リピート間隔の目安は 100 ms 以上 (パケット長と同程度) を推奨。
 
+### 6.6.4. HEART_BEAT (0x08)
+
+ホストがアダプタとの接続維持を表明する。応答は **ACK (0x06)**。
+
+```
+F0 7D 01 08 <req_id> F7
+```
+
+#### 接続ライフサイクル
+
+```
+                   ┌──────────────┐
+                   │   WAITING    │← (3s HB 無し / override も reset)
+        ┌─────────→│ LED=黄       │
+        │          └──────┬───────┘
+        │                 │ IDENTIFY_REQUEST 受信
+        │                 ↓
+        │          ┌──────────────┐
+        │          │   SCANNED    │
+        │          │ LED=緑       │
+        │          └──────┬───────┘
+        │                 │ HEART_BEAT 受信
+        │                 ↓
+        │          ┌──────────────┐
+        │          │  CONNECTED   │
+        └──────────┤ LED=青       │
+   3s HB 無し       │ (Note/CC 受信 │
+                   │  時は青点滅)  │
+                   └──────────────┘
+```
+
+- ホストは接続を維持したい間、**1 秒間隔** で HEART_BEAT を送り続ける
+- ホストは ACK の応答を確認する。**3 回連続 (= 3 秒) で応答が無い場合**、
+  ホストは接続失敗と判断してユーザーに通知し、デバイス一覧に戻る
+- デバイスも同様に 3 秒間 HEART_BEAT を受信しなければ WAITING に戻る
+- WAITING 復帰時、デバイスは LED override を自動的にクリアする (色は黄、点滅なし)
+- IDENTIFY_REQUEST を任意の状態で受信すると SCANNED に戻る。ホストは
+  「アダプタ利用中の rescan は接続を切る」前提で UI を構築する
+
+### 6.6.5. DISCONNECT (0x09)
+
+ホストがアダプタの選択を解除した (= 操作画面 / rename 画面から戻った) ことを明示する。応答は **ACK (0x06)**。
+
+```
+F0 7D 01 09 <req_id> F7
+```
+
+#### 動作
+
+- デバイスは状態を即座に `SCANNED` (緑) に戻し、LED override (色 + 点滅) をクリアする
+- HEART_BEAT タイムアウト (3 秒) で WAITING に落ちるのを待たずに済むため、UX 上「画面を抜けたらすぐ緑に戻る」見栄えになる
+- ホストは本コマンドを送ったあと、HEART_BEAT 送信を停止する。次に同デバイスを選択するときは IDENTIFY → HEART_BEAT 再開でフローを再開する
+
+#### 送信タイミング
+
+- ジョイスティック/キーボード操作画面から戻るとき
+- ニックネーム編集画面から戻るとき (override は自動 reset されるため、別途 `SET_LED(reset)` を送る必要はない)
+
 ### 6.7. SET_CONFIG (0x10)
 
 デバイスの設定を変更する。応答は **ACK (0x06)**。
@@ -499,7 +589,55 @@ F7
 
 未知の key は `status=UNKNOWN_KEY` (0x02)、value 範囲外は `status=INVALID_VALUE` (0x03) で ACK を返す。
 
-### 6.8. RESET (0x7F)
+### 6.8. SET_LED (0x20) — 色 override
+
+アダプタ基板上のステータス LED (PB0 接続の WS2812B-2020) の表示色を **override** する。応答は **ACK (0x06)**。
+
+```
+F0 7D 01 20 <req_id> <R> <G> <B> F7
+```
+
+| パラメータ | 値 | 説明 |
+|-----------|------|------|
+| `<R>` | 0x00-0x7F | 赤成分 (7bit)。デバイス側で `(v<<1) \| (v>>6)` により 8bit (0-255) に拡張 |
+| `<G>` | 0x00-0x7F | 緑成分 (7bit) |
+| `<B>` | 0x00-0x7F | 青成分 (7bit) |
+
+#### 色 override セマンティクス
+
+通常時、LED の色はアダプタの接続状態 (`WAITING`/`SCANNED`/`CONNECTED`) でデバイスが自律的に決める (6.6.4 のステートマシン)。本コマンドは「色を上書きしたい」状況 (例: ホストアプリでアダプタ個体に名前を付ける編集画面など) で送る。
+
+- override は **`SET_LED` を最後に送った色** が維持される
+- スケール後 RGB = `(255, 255, 255)` (= 全 7bit が `0x7F`) は **reset センチネル** として扱う。override が解除され、LED は状態色に戻り、`SET_LED_BLINK` も None にリセットされる
+- HEART_BEAT が 3 秒途絶えてデバイスが `WAITING` に戻った際も、override は自動的に reset される (ホストは reset を意識せずに済む)
+- 最大輝度の白を出したい場合は `(0x7E, 0x7E, 0x7E)` (= scaled 253) を送る。`0x7F` は reset 用に予約されているため使えない
+
+### 6.9. SET_LED_BLINK (0x21) — 点滅速度 override
+
+ステータス LED の点滅速度を **override** する。応答は **ACK (0x06)**。色は本コマンドでは変えない。
+
+```
+F0 7D 01 21 <req_id> <speed> F7
+```
+
+| `<speed>` | 名称 | 周期 |
+|-----------|------|------|
+| 0x00 | None | 点滅しない (色を常時点灯) |
+| 0x01 | Slow | 1 Hz (500ms ON / 500ms OFF) |
+| 0x02 | Mid  | 2 Hz (250ms ON / 250ms OFF) |
+| 0x03 | High | 4 Hz (125ms ON / 125ms OFF) |
+
+範囲外の値は `status=INVALID_VALUE` (0x03) で ACK が返る。
+
+`SET_LED` で color override が掛かっているときのみ意味を持つ。color override が無い (状態色を表示中の) 状態では `SET_LED_BLINK` は値だけ保持されるが、画面には反映されない (CONNECTED + activity の自動青点滅が優先)。
+
+#### ホスト側の運用ガイド
+
+- 「編集中」「警告」など、ユーザーに注目させたい状態は `SET_LED(red)` + `SET_LED_BLINK(Slow)` の組合せ
+- override を解除したいとき (編集終了など) は `SET_LED(255,255,255)` 1 発で十分。色も点滅もデバイス側が状態に応じて自動復帰する
+- CONNECTED 状態の activity 点滅 (青 High) は **デバイスが Note/CC 受信を検知して自動的に出す**。ホストは何もする必要がない
+
+### 6.10. RESET (0x7F)
 
 デバイスを初期状態にリセットする。全キー/ボタンを解放状態にする。応答は **ACK (0x06)**。
 
