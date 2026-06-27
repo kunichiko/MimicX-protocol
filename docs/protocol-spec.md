@@ -17,6 +17,10 @@
   - **トランスポート別パラメータ** (§2.4) を新設。ACK / HEART_BEAT のタイムアウトを
     トランスポートごとに定義 (USB-MIDI は従来値、BLE-MIDI は緩和値)。
     ホストは接続中のトランスポートに応じて値を切り替える
+  - **I2C-MIDI バインディング** (§2.5) を追加。無線版アダプタの 2 チップ構成
+    (ホスト MCU ⇄ CH32 コプロセッサ) 用の内部トランスポート。同じ MIDI/SysEx
+    バイト列を I2C で運び、INT 線で device→host 非同期通知を行う。phone ⇄ アダプタ間の
+    互換性 (protocol version) には影響しない (アダプタ内部の実装トランスポート)
   - 互換性: リアルタイム / SysEx のワイヤフォーマットは 0.7 と完全互換。
     既存の USB-MIDI デバイス (protocol 0.7) はそのまま接続可能。本リリースは
     後方互換の機能追加のため **MINOR up**
@@ -129,6 +133,48 @@ SysEx (`F0 … F7`) は 1 つの BLE-MIDI characteristic 書き込みに収ま�
 | HEART_BEAT 送信間隔 (§6.6.4) | 1 s | 1 s | 共通 |
 | HEART_BEAT 連続失敗で切断 | 3 回 (3 s) | **5 回 (5 s)** | BLE のパケットロス耐性 |
 | 接続確立の待ち時間 (ホスト) | ~即時 | 数秒を許容 | BLE は connect + service discovery に時間を要する |
+
+### 2.5. I2C-MIDI (内部トランスポート: ホスト MCU ⇄ デバイスエンジン)
+
+無線版アダプタ等で、**接続処理 (ESP32 等) と GPIO/タイミング制御 (CH32X035) を 2 チップに
+分ける**構成で使う、チップ間の内部トランスポート。タイミングがシビアな HID 出力
+(ジョイスティックの TH ストローブ応答など) は CH32 内で完結させ、I2C には低速な状態
+(ボタン・モード等) だけを流す。
+
+- **CH32X035 = I2C スレーブ (デバイスエンジン)**、**ホスト MCU = I2C マスター (ブリッジ)**。
+- ペイロードは **MimicX の MIDI/SysEx バイト列そのもの** (USB-MIDI / BLE-MIDI と同一)。
+  CH32 は受信バイトを既存の MIDI パーサに流すだけで、全機能 (IDENTIFY / 各モード /
+  TARGET_RX 等) をそのまま扱える。
+- ホスト MCU は phone 側トランスポート (BLE-MIDI 等) と I2C-MIDI の間で**バイト列を
+  中継するだけ**。プロトコル解釈はすべて CH32 が行う。
+- これは**アダプタ内部の実装トランスポート**であり、phone ⇄ アダプタ間の互換性
+  (protocol version) には影響しない。
+
+#### 2.5.1. 物理層
+- I2C: SDA / SCL + プルアップ (2.2k–4.7kΩ @3.3V)、400 kHz。スレーブアドレス既定 `0x33`。
+- **INT 線** (CH32 → ホスト, active-low, open-drain + プルアップ): device→host データが
+  キューにある間 Low。ホストは Low 検出で read しに行く (非同期通知 = X68k キーボードの
+  `TARGET_RX` 等に必須)。
+
+#### 2.5.2. フレーム形式 (両方向共通)
+`[LEN] [MIDI バイト × LEN]` (LEN = 0–63)。1 トランザクションに完結した MIDI メッセージを
+1 つ以上含める。読み出し時 **LEN = 0 は「データ無し」**。
+
+- **ホスト → CH32 (write)**: host→device メッセージ (Note On/Off, CC, SysEx コマンド)。
+  - 例: UP 押下 `03 90 01 7F` / UP 解放 `03 80 01 00`
+  - 例: パッドモード MD6B `08 F0 7D 01 10 21 03 01 F7` (SET_CONFIG key=0x03 val=1)
+- **CH32 → ホスト (read)**: device→host メッセージ (IDENTIFY_RSP / ACK / TARGET_RX /
+  状態通知 CC)。ホストは INT=Low (またはポーリング) で read し、LEN=0 になるまで読み切る
+  と CH32 が INT を解除する。
+
+#### 2.5.3. ブリッジ動作 (ホスト MCU)
+- phone 側で受けた host→device バイトをそのまま I2C write。
+- INT=Low → I2C read → 取得した device→host バイトを phone 側へ notify。
+- phone 切断時はホストが `DISCONNECT` + `RESET` を I2C に流し、出力を安全側 (全解放) にする。
+
+#### 2.5.4. ファームウェア更新 (2 チップ構成)
+- CH32 は完成後ほぼ更新不要、変化が多いのはホスト MCU 側。通常はホストのみ更新する運用。
+- CH32 の書き換えは SWD / USB DFU、または将来的にホスト MCU が CH32 を書き込む構成も可。
 
 ## 3. MIDI チャンネル割り当て
 
