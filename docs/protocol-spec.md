@@ -21,6 +21,9 @@
     (ホスト MCU ⇄ CH32 コプロセッサ) 用の内部トランスポート。同じ MIDI/SysEx
     バイト列を I2C で運び、INT 線で device→host 非同期通知を行う。phone ⇄ アダプタ間の
     互換性 (protocol version) には影響しない (アダプタ内部の実装トランスポート)
+  - **BRIDGE_IDENTIFY** (0x0A / 0x0B, §6.4.5) を追加。2 チップ構成でブリッジ (ESP32) 自身の
+    fw / transport / serial を識別する (ブリッジが自答, CH32 へは中継しない)。デバイスの
+    serial (同一性) は IDENTIFY の CH32 Chip UID を正とする
   - 互換性: リアルタイム / SysEx のワイヤフォーマットは 0.7 と完全互換。
     既存の USB-MIDI デバイス (protocol 0.7) はそのまま接続可能。本リリースは
     後方互換の機能追加のため **MINOR up**
@@ -396,6 +399,8 @@ F0 7D 01 <rsp_cmd> <req_id> <status> <payload...> F7
 | EMIT_REMOTE | 0x07 | ホスト→デバイス | `07 <req_id> <code>` | ACK |
 | HEART_BEAT | 0x08 | ホスト→デバイス | `08 <req_id>` | ACK |
 | DISCONNECT | 0x09 | ホスト→デバイス | `09 <req_id>` | ACK |
+| BRIDGE_IDENTIFY_REQUEST | 0x0A | ホスト→ブリッジ | レガシー (req_id なし) | BRIDGE_IDENTIFY_RESPONSE |
+| BRIDGE_IDENTIFY_RESPONSE | 0x0B | ブリッジ→ホスト | レガシー (req_id なし) | — |
 | SET_CONFIG | 0x10 | ホスト→デバイス | `10 <req_id> <key> <value...>` | ACK |
 | GET_CONFIG | 0x11 | ホスト→デバイス | `11 <req_id> <key>` | CONFIG_RESPONSE |
 | CONFIG_RESPONSE | 0x12 | デバイス→ホスト | `12 <req_id> <status> <key> <value...>` | — |
@@ -505,6 +510,38 @@ num_channels = 2
 ch=0, type=2 (Joystick), target=1 (ATARI)
 ch=1, type=1 (Keyboard), target=2 (X68000)
 ```
+
+#### 6.4.5. BRIDGE_IDENTIFY (0x0A / 0x0B) — ブリッジ (無線フロントエンド) の識別
+
+2 チップ構成 (§2.5: ホスト ⇄ ブリッジ MCU ⇄ I2C ⇄ CH32 デバイスエンジン) では、
+ファームウェアが 2 つ存在する:
+
+- **デバイスエンジン (CH32)**: `IDENTIFY` (0x01/0x02) で識別。fw バージョン・チャンネル
+  マップ・**デバイス serial (Chip UID)** を返す。
+- **ブリッジ (ESP32 等)**: `BRIDGE_IDENTIFY` で識別。**ブリッジ自身が応答**し、CH32 へは
+  中継しない。
+
+`BRIDGE_IDENTIFY_REQUEST` (ブートストラップ用途のため req_id なし):
+```
+F0 7D 01 0A F7
+```
+
+`BRIDGE_IDENTIFY_RESPONSE`:
+```
+F0 7D 01 0B
+  <proto_major> <proto_minor>   ; ブリッジが実装する (phone 側) プロトコルバージョン
+  <fw_major> <fw_minor> <fw_patch> ; ブリッジ (ESP32) のファームバージョン
+  <transport>                   ; phone 側トランスポート (0x00=USB, 0x01=BLE)
+  <serial[16]>                  ; ブリッジの serial (ESP32 MAC 由来, 16 ASCII hex)
+  <name...>                     ; ブリッジ名 (ASCII, 例 "MimicX-ESP32")
+F7
+```
+
+- **serial の方針**: ニックネーム永続化等で使う「デバイスの同一性」は `IDENTIFY` の
+  **CH32 Chip UID を正**とする (基板/無線モジュールを替えても CH32 が同じなら同一デバイス)。
+  ブリッジの serial (ESP32 MAC) は BRIDGE_IDENTIFY 側にのみ持たせる (BLE 接続先の識別用)。
+- **単一チップ (USB 直結) の場合**: ブリッジが存在しないため `BRIDGE_IDENTIFY_REQUEST` には
+  応答が返らない。ホストはタイムアウトを「ブリッジ無し (単一チップ)」と解釈する。
 
 ### 6.5. CAPABILITY_REQUEST (0x03)
 
