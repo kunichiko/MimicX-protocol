@@ -1,6 +1,6 @@
 # Mimic X Protocol Specification
 
-**Version:** 0.8.0 (Draft)
+**Version:** 0.8.0
 **Date:** 2026-06-24
 
 ## 変更履歴
