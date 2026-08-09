@@ -1,10 +1,19 @@
 # Mimic X Protocol Specification
 
-**Version:** 0.9.0
-**Date:** 2026-07-26
+**Version:** 0.10.0
+**Date:** 2026-08-09
 
 ## 変更履歴
 
+- **0.10.0** (2026-08-09): **BRIDGE_REBOOT_BOOTLOADER の追加**。
+  - **BRIDGE_REBOOT_BOOTLOADER** (0x0C, §6.4.6) を追加。ブリッジ MCU (ESP32 系) を
+    ROM ダウンロードモードで再起動させる開発者向けコマンド。基板上の BOOT ボタンが
+    小さく押しづらい / 筐体で押せない場合でもファーム書き込みができるようにする。
+    誤動作防止に 3 バイトのマジック ("BOT") を必須とし、不一致なら INVALID_VALUE で
+    拒否する。BRIDGE_IDENTIFY と同じくブリッジが自答し CH32 へは中継しない
+  - 互換性: ワイヤフォーマットは 0.9 と完全互換。**ブリッジ専用の追加コマンド**であり、
+    デバイス (CH32) 側の実装は不要 (未対応構成では UNKNOWN_COMMAND が返るだけ)。
+    後方互換の機能追加のため **MINOR up**
 - **0.9.0** (2026-07-26): **TOWNS パッド RUN/SELECT の追加 + ジョイスティック仕様の実装追従**。
   - ジョイスティックの **TOWNS パッド RUN/SELECT ボタン** (note 21/22, §4.2.1) を追加。
     ATARI パッドモードで RUN = 左右同時アサート、SELECT = 上下同時アサートを出力する。
@@ -442,6 +451,7 @@ F0 7D 01 <rsp_cmd> <req_id> <status> <payload...> F7
 | DISCONNECT | 0x09 | ホスト→デバイス | `09 <req_id>` | ACK |
 | BRIDGE_IDENTIFY_REQUEST | 0x0A | ホスト→ブリッジ | レガシー (req_id なし) | BRIDGE_IDENTIFY_RESPONSE |
 | BRIDGE_IDENTIFY_RESPONSE | 0x0B | ブリッジ→ホスト | レガシー (req_id なし) | — |
+| BRIDGE_REBOOT_BOOTLOADER | 0x0C | ホスト→ブリッジ | `0C <req_id> 42 4F 54` | ACK |
 | SET_CONFIG | 0x10 | ホスト→デバイス | `10 <req_id> <key> <value...>` | ACK |
 | GET_CONFIG | 0x11 | ホスト→デバイス | `11 <req_id> <key>` | CONFIG_RESPONSE |
 | CONFIG_RESPONSE | 0x12 | デバイス→ホスト | `12 <req_id> <status> <key> <value...>` | — |
@@ -583,6 +593,35 @@ F7
   ブリッジの serial (ESP32 MAC) は BRIDGE_IDENTIFY 側にのみ持たせる (BLE 接続先の識別用)。
 - **単一チップ (USB 直結) の場合**: ブリッジが存在しないため `BRIDGE_IDENTIFY_REQUEST` には
   応答が返らない。ホストはタイムアウトを「ブリッジ無し (単一チップ)」と解釈する。
+
+#### 6.4.6. BRIDGE_REBOOT_BOOTLOADER (0x0C) — ブリッジをブートローダで再起動
+
+ブリッジ MCU (ESP32 系) を **ROM ダウンロードモード**で再起動させる。ファーム書き込み時に
+基板上の BOOT ボタンを物理的に押す必要をなくすための **開発者向け**コマンド。
+
+```
+F0 7D 01 0C <req_id> 42 4F 54 F7
+              ^^      ^^^^^^^^
+              req_id  マジック "BOT" (0x42 0x4F 0x54)
+```
+
+- **マジック必須**: 誤動作でデバイスが動作不能 (要 BOOT ボタン) になるのを避けるため、
+  3 バイトのマジックが一致しない場合は `status = INVALID_VALUE (0x03)` の ACK を返し、
+  **再起動しない**
+- **応答**: マジックが一致したら先に `ACK (status = OK)` を返し、**約 300ms 後**に再起動する。
+  ACK を送出しきる時間を確保するため即時には再起動しない
+- **ブリッジ自答**: BRIDGE_IDENTIFY と同様、ブリッジが処理し CH32 へは中継しない。
+  ブリッジを持たない単一チップ構成 (USB 直結) では CH32 が
+  `status = UNKNOWN_COMMAND (0x01)` の ACK を返す
+- **再起動後**: ブリッジは MIDI デバイスとして列挙されなくなり、USB は
+  ROM のシリアル/JTAG デバイスとして再列挙される。ホストは接続が切れたものとして扱う。
+  通常動作に戻すには電源再投入 (またはファーム書き込み) が必要
+- **実装** (参考): ESP32-S3 / C3 / 無印 ESP32 は `RTC_CNTL_OPTION1_REG` の
+  `RTC_CNTL_FORCE_DOWNLOAD_BOOT`、ESP32-C6 は `LP_AON_SYS_CFG_REG` の
+  `LP_AON_FORCE_DOWNLOAD_BOOT` を立ててからリセットする
+- **ホスト側の応用**: Web MIDI で本コマンドを送ってから Web Serial + esptool-js に
+  切り替えることで、ブラウザだけで書き込みまで完結できる (再列挙でポートが変わるため
+  ユーザにポートの選び直しを促すこと)
 
 ### 6.5. CAPABILITY_REQUEST (0x03)
 
