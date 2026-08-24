@@ -43,6 +43,26 @@ MIDI 1.0 を利用した汎用HID制御通信プロトコルライブラリ。Da
 - firmware: `src/main.c` の `PROTOCOL_VERSION_MAJOR` / `_MINOR`
 - app: `lib/protocol.dart` の `MinSupportedProtocol.knownLatestMajor` / `knownLatestMinor`
 
+## ライセンス
+
+**CC BY 4.0** ([`LICENSE`](LICENSE))。**継承条件 (ShareAlike) は意図的に付けて
+いません** — これは相互運用のための仕様であり、第三者が独自の実装とその
+ドキュメントを望むライセンスで公開できることを優先します。表や図はそのまま
+持って行って構いません (出典表示のみお願いします)。
+
+仕様書の著作権は仕様を実装したコードには及びません。この仕様に基づく互換実装は
+ライセンスに関係なく自由に作成・頒布できます。商標の扱いは [`NOTICE`](NOTICE)
+を参照してください。
+
+プロジェクト全体のライセンス構成:
+
+| リポジトリ | ライセンス |
+|---|---|
+| MimicX-hardware | CERN-OHL-S-2.0 (`tools/` のみ Apache-2.0) |
+| MimicX-firmware | Apache License 2.0 |
+| MimicX-app | Apache License 2.0 |
+| **MimicX-protocol** | **CC BY 4.0** |
+
 ## 関連リポジトリ
 
 - [MimicX-app](https://github.com/kunichiko/MimicX-app) - Flutterアプリ
